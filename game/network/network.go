@@ -6,10 +6,11 @@ import (
 	"sync"
 )
 
-type GameNetManager struct {
-	Addr             *net.UDPAddr
-	Conn             *net.UDPConn
-	Conn_lock_mutex  sync.Mutex
-	Game_state_mutex sync.Mutex
-	Game_state       *server.GameState
+type GameNetwork struct {
+	client_addr      *net.UDPAddr
+	server_addr      *net.UDPAddr
+	conn             *net.UDPConn
+	conn_mutex       sync.Mutex
+	game_state_mutex sync.Mutex
+	game_state       *server.GameState
 }

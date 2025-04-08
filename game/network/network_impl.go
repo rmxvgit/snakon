@@ -2,100 +2,108 @@ package network
 
 import (
 	"encoding/binary"
+	"fmt"
 	"net"
 	"snakon/server"
-	"snakon/utils"
 )
 
-func SetupNetManager(addr_str string) (net_manager *GameNetManager, err error) {
-	net_manager = &GameNetManager{}
+func NewGameNetwork(my_addr, serv_addr string) (network *GameNetwork, err error) {
+	network = &GameNetwork{}
 
-	net_manager.Game_state = server.NewGameState()
+	network.game_state = server.NewGameState()
 
-	err = net_manager.SetAddr(addr_str)
-	if err != nil {
-		return nil, err
-	}
-	err = net_manager.SetConn()
+	network.client_addr, err = net.ResolveUDPAddr("udp4", my_addr)
 	if err != nil {
 		return nil, err
 	}
 
-	go net_manager.Listen()
+	network.server_addr, err = net.ResolveUDPAddr("udp4", serv_addr)
+	if err != nil {
+		return nil, err
+	}
 
-	return net_manager, nil
+	network.conn, err = net.ListenUDP("udp4", network.client_addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return network, nil
 }
 
-func (net_magager *GameNetManager) SetAddr(addr_str string) (err error) {
-	net_magager.Addr, err = net.ResolveUDPAddr("udp4", addr_str)
-	return err
-}
-
-func (net_manager *GameNetManager) SetConn() (err error) {
-	net_manager.Conn, err = net.ListenUDP("udp4", net_manager.Addr)
-	return err
-}
-
-func (net_manager *GameNetManager) Listen() {
+func (network *GameNetwork) Listen() {
 	for {
 		buf := make([]byte, 1024)
 
-		_, remote_addr, err := net_manager.Conn.ReadFromUDP(buf)
+		_, remote_addr, err := network.conn.ReadFromUDP(buf)
 		if err != nil {
 			continue
 		}
 
-		go net_manager.HandleMessage(remote_addr, buf)
+		go network.HandleMessage(remote_addr, buf)
 	}
 }
 
-func (net_manager *GameNetManager) HandleMessage(remote_addr *net.UDPAddr, data []byte) {
+func (network *GameNetwork) HandleMessage(remote_addr *net.UDPAddr, data []byte) {
 	flag := server.MessageFlag(data[0])
 
 	switch flag {
 	case server.MANY_PLAYER_POS_MSG:
-		net_manager.HandleManyPlayerPosMessage(data)
+		network.HandleManyPlayerPosMessage(data)
 	}
 }
 
-func (net_manager *GameNetManager) HandleManyPlayerPosMessage(data []byte) {
+func (network *GameNetwork) HandleManyPlayerPosMessage(data []byte) {
 	msg := server.DecodeManyPlayerPositionMessage(data)
 
-	for _, pl_pos := range msg.Positions {
-		net_manager.Game_state_mutex.Lock()
+	players_state := network.game_state.PlayersState
 
-		if net_manager.Game_state.PlayersState[pl_pos.PlayerID] == nil {
-			net_manager.Game_state.PlayersState[pl_pos.PlayerID] = &server.PlayerState{
-				ID: pl_pos.PlayerID,
-				Pos: server.PlayerPos{
-					X: pl_pos.Pos.X,
-					Y: pl_pos.Pos.Y,
-				},
-			}
-		} else {
-			net_manager.Game_state.PlayersState[pl_pos.PlayerID].Pos = pl_pos.Pos
+	network.game_state_mutex.Lock()
+	for _, other_player := range msg.Positions {
+		if players_state[other_player.PlayerID] == nil {
+			players_state[other_player.PlayerID] = server.NewPlayerState(other_player.PlayerID)
 		}
-		net_manager.Game_state_mutex.Lock()
+		players_state[other_player.PlayerID].Pos = other_player.Pos
 	}
+	network.game_state_mutex.Unlock()
 }
 
-func (net_manager *GameNetManager) SendId(id uint32) {
-	serv_addr, err := net.ResolveUDPAddr("udp4", ":3001")
-	utils.PanicOnError(err)
+func (network *GameNetwork) NewPlayer(id uint32) {
 	msg := make([]byte, 1024)
-	msg[0] = 0
-	binary.BigEndian.PutUint32(msg[1:5], id)
-	net_manager.Conn.WriteToUDP(msg, serv_addr)
+	msg[0] = byte(server.NEW_PLAYER_MESSAGE)
+
+	binary.BigEndian.PutUint32(msg[1:5], uint32(id))
+
+	network.conn_mutex.Lock()
+	network.conn.WriteToUDP(msg, network.server_addr)
+	network.conn_mutex.Unlock()
+
 }
 
-func (net_manager *GameNetManager) SendMyPos(id, x, y uint32) {
-	serv_addr, err := net.ResolveUDPAddr("udp4", ":3001")
-	utils.PanicOnError(err)
+func (network *GameNetwork) SendEntityPos(id int32, pos server.PlayerPos) {
 	msg := make([]byte, 1024)
-	msg[0] = 1
-	binary.BigEndian.PutUint32(msg[1:5], id)
-	binary.BigEndian.PutUint32(msg[5:9], x)
-	binary.BigEndian.PutUint32(msg[9:13], y)
+	msg[0] = byte(server.PLAYER_POS_MESSAGE)
 
-	net_manager.Conn.WriteToUDP(msg, serv_addr)
+	binary.BigEndian.PutUint32(msg[1:5], uint32(id))
+	binary.BigEndian.PutUint32(msg[5:9], uint32(pos.X))
+	binary.BigEndian.PutUint32(msg[9:13], uint32(pos.Y))
+
+	network.conn_mutex.Lock()
+	network.conn.WriteToUDP(msg, network.server_addr)
+	network.conn_mutex.Unlock()
+}
+
+func (network *GameNetwork) GetServerGameState() server.GameState {
+	network.game_state_mutex.Lock()
+	defer network.game_state_mutex.Unlock()
+	return *network.game_state
+}
+
+func (network *GameNetwork) GetPlayerState(id int32) (server.PlayerState, error) {
+	network.game_state_mutex.Lock()
+	state, exists := network.game_state.PlayersState[id]
+	defer network.game_state_mutex.Unlock()
+	if !exists {
+		return server.PlayerState{}, fmt.Errorf("non existent player")
+	}
+	return *state, nil
 }

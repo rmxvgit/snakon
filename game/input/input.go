@@ -8,5 +8,5 @@ type GameInput struct {
 
 type KeyboardInput struct {
 	key_mutex sync.Mutex
-	key       rune
+	key       byte
 }

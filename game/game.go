@@ -7,7 +7,8 @@ import (
 )
 
 type Game struct {
-	input      *input.GameInput
-	net_handle *network.GameNetManager
-	renderer   *render.Renderer
+	input     *input.GameInput
+	internet  *network.GameNetwork
+	renderer  *render.Renderer
+	player_id int32
 }
