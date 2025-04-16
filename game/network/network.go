@@ -2,7 +2,6 @@ package network
 
 import (
 	"net"
-	"snakon/server"
 	"sync"
 )
 
@@ -12,5 +11,7 @@ type GameNetwork struct {
 	conn             *net.UDPConn
 	conn_mutex       sync.Mutex
 	game_state_mutex sync.Mutex
-	game_state       *server.GameState
+	game_state       *NetworkGameState
 }
+
+type NetworkGameState struct{}

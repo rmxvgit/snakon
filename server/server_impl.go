@@ -1,44 +1,40 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"os"
+	gametypes "snakon/gameTypes"
+	"snakon/internet/messages"
 	"snakon/utils"
+	"sync"
 )
 
 func Run() {
-	addr := os.Args[2]
+	addr := os.Args[2] // listening addr
+
 	server, err := NewServer(addr)
 	utils.PanicOnError(err)
-	server.Listen()
+
+	server.Listen() // the main loop of the server program
 }
 
 func NewServer(addr_str string) (serv *Server, err error) {
 	serv = &Server{}
 
-	serv.game_state = NewGameState()
+	serv.state = &ServerState{}
 
-	err = serv.SetAddr(addr_str)
+	serv.addr, err = net.ResolveUDPAddr("udp4", addr_str)
 	if err != nil {
 		return nil, err
 	}
 
-	err = serv.SetConn()
+	serv.conn, err = net.ListenUDP("udp4", serv.addr)
 	if err != nil {
 		return nil, err
 	}
 
 	return serv, nil
-}
-
-func (server *Server) SetAddr(addr_str string) (err error) {
-	server.addr, err = net.ResolveUDPAddr("udp4", addr_str)
-	return err
-}
-
-func (server *Server) SetConn() (err error) {
-	server.conn, err = net.ListenUDP("udp4", server.addr)
-	return err
 }
 
 func (server *Server) Listen() {
@@ -47,6 +43,7 @@ func (server *Server) Listen() {
 
 		_, remote_addr, err := server.conn.ReadFromUDP(buf)
 		if err != nil {
+			server.LogError(err)
 			continue
 		}
 
@@ -54,56 +51,98 @@ func (server *Server) Listen() {
 	}
 }
 
+func (server *Server) LogError(err error) {}
+
 func (server *Server) HandleMessage(remote_addr *net.UDPAddr, data []byte) {
-	flag := MessageFlag(data[0])
+	flag := messages.MessageFlag(data[0])
+
+	var err_code MsgErrCode = MsgOk
+	var msg_err error = nil
 
 	switch flag {
-	case NEW_PLAYER_MESSAGE:
-		server.HandleNewPlayer(remote_addr, data)
-	case PLAYER_POS_MESSAGE:
-		server.HandlePositionMessage(remote_addr, data)
+
+	case messages.NEW_PLAYER_MESSAGE:
+		msg_err, err_code = server.HandleNewPlayerMessage(remote_addr, data)
+
+	case messages.PLAYER_POS_MESSAGE:
+		msg_err, err_code = server.HandlePlayerPositionMessage(remote_addr, data)
+	}
+
+	if msg_err != nil {
+		server.HandleMessageError(msg_err, err_code, remote_addr, data)
 	}
 
 	// send response
-	server.SendGameState(remote_addr, data)
+	server.SendResponse(remote_addr, flag)
 }
 
-func (server *Server) HandlePositionMessage(remote_addr *net.UDPAddr, data []byte) {
-	msg, err := DecodePlayerPositionMessage(data)
-	utils.PanicOnError(err)
+func (server *Server) HandleMessageError(err error, errCode MsgErrCode, remote_addr *net.UDPAddr, data []byte) {
+}
 
-	server.state_mutex.Lock()
-	if server.game_state.PlayersState[msg.PlayerID] == nil {
-		server.game_state.PlayersState[msg.PlayerID] = NewPlayerState(msg.PlayerID)
+func (server *Server) HandlePlayerPositionMessage(remote_addr *net.UDPAddr, msg_data []byte) (error, MsgErrCode) {
+	msg_info, ordering := messages.DecodePlayerPositionMessage(msg_data)
+
+	player_state, exists := server.state.players[msg_info.PlayerID]
+	if !exists {
+		return fmt.Errorf("non existent player: %d", msg_info.PlayerID), NullPlayerReference
 	}
-	server.game_state.PlayersState[msg.PlayerID].Pos.X = msg.Pos.X
-	server.game_state.PlayersState[msg.PlayerID].Pos.Y = msg.Pos.Y
-	server.state_mutex.Unlock()
+
+	player_state.Mutex.Lock()
+	defer player_state.Mutex.Unlock()
+
+	if player_state.LastMessage > ordering {
+		return fmt.Errorf("packet dropped"), MessageDrop
+	}
+
+	player_state.Pos.X = msg_info.Pos.X
+	player_state.Pos.Y = msg_info.Pos.Y
+
+	return nil, MsgOk
 }
 
-func (server *Server) HandleNewPlayer(remote_addr *net.UDPAddr, data []byte) {
-	msg, err := DecodeNewPlayerMessage(data)
-	utils.PanicOnError(err)
+func (server *Server) HandleNewPlayerMessage(remote_addr *net.UDPAddr, data []byte) (error, MsgErrCode) {
+	msg_info := messages.DecodeNewPlayerMessage(data)
 
-	server.state_mutex.Lock()
-	server.game_state.PlayersState[msg.PlayerID] = NewPlayerState(msg.PlayerID)
-	server.state_mutex.Unlock()
+	_, exists := server.state.players[msg_info.PlayerID]
+	if exists {
+		return fmt.Errorf("redeclaration of player: %d", msg_info.PlayerID), PlayerRedeclaration
+	}
+
+	server.state.players[msg_info.PlayerID] = &PlayerServerState{
+		LastMessage: 0,
+		Mutex:       sync.Mutex{},
+		Pos:         gametypes.Position{},
+	}
+
+	return nil, MsgOk
 }
 
-func (server *Server) SendGameState(remote_addr *net.UDPAddr, data []byte) {
-	data_packets := EncodeGameStateMessage(server.game_state)
+func (server *Server) SendResponse(remote_addr *net.UDPAddr, flag messages.MessageFlag) {
+	position_messages := server.generateAllPlayerPositionMessages()
+	position_packets := position_messages.Encode(0)
 
-	for _, packet := range data_packets {
-		server.conn.WriteToUDP(packet, remote_addr)
+	server.SendPackets(remote_addr, position_packets)
+}
+
+func (server *Server) generateAllPlayerPositionMessages() messages.ManyPlayerPositionDto {
+	return messages.ManyPlayerPositionDto{}
+}
+
+func (server *Server) SendPackets(dest_addr *net.UDPAddr, packets [][]byte) {
+	for i := range packets {
+		n, err := server.conn.WriteToUDP(packets[i], dest_addr)
+
+		if err != nil {
+			server.LogError(err)
+			continue
+		}
+
+		if n != PACKET_SIZE {
+			err = fmt.Errorf("não foi possível escrever toda a mensagem")
+			server.LogError(err)
+			continue
+		}
 	}
 }
 
-func EncodeGameStateMessage(game_state *GameState) [][]byte {
-
-	players_position_data := game_state.ManyPlayerPositionMessage()
-	encoded_position_data_packets := players_position_data.EncodeManyPlayerPositionMessage()
-
-	//you can add more packets here if needed
-
-	return encoded_position_data_packets
-}
+func (server *Server) SendPacket(dest_addr *net.UDPAddr, packets []byte) {}

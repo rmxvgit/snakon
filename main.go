@@ -10,7 +10,7 @@ import (
 // to run the program in serever mode:
 // ./<name_of_the_executable> serv listening_port
 func main() {
-	run_mode := os.Args[1]
+	run_mode := os.Args[1] // serv / cli
 
 	if run_mode == "serv" {
 		server.Run()
