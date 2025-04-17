@@ -54,6 +54,8 @@ func (server *Server) Listen() {
 func (server *Server) LogError(err error) {}
 
 func (server *Server) HandleMessage(remote_addr *net.UDPAddr, data []byte) {
+	server.AcountMessage(remote_addr)
+
 	flag := messages.MessageFlag(data[0])
 
 	var err_code MsgErrCode = MsgOk
@@ -80,19 +82,26 @@ func (server *Server) HandleMessageError(err error, errCode MsgErrCode, remote_a
 }
 
 func (server *Server) HandlePlayerPositionMessage(remote_addr *net.UDPAddr, msg_data []byte) (error, MsgErrCode) {
+	client := server.clients[remote_addr.String()]
+
 	msg_info, ordering := messages.DecodePlayerPositionMessage(msg_data)
+
+	last_msg_ordering := client.getLastMessage()
 
 	player_state, exists := server.state.players[msg_info.PlayerID]
 	if !exists {
 		return fmt.Errorf("non existent player: %d", msg_info.PlayerID), NullPlayerReference
 	}
 
-	player_state.Mutex.Lock()
-	defer player_state.Mutex.Unlock()
-
-	if player_state.LastMessage > ordering {
+	// dropa o pacote caso a mensagem recebida seja defasada
+	if last_msg_ordering > ordering {
 		return fmt.Errorf("packet dropped"), MessageDrop
 	}
+
+	client.setLastMessage(ordering)
+
+	player_state.Mutex.Lock()
+	defer player_state.Mutex.Unlock()
 
 	player_state.Pos.X = msg_info.Pos.X
 	player_state.Pos.Y = msg_info.Pos.Y
@@ -118,14 +127,28 @@ func (server *Server) HandleNewPlayerMessage(remote_addr *net.UDPAddr, data []by
 }
 
 func (server *Server) SendResponse(remote_addr *net.UDPAddr, flag messages.MessageFlag) {
+	client := server.clients[remote_addr.String()]
+
 	position_messages := server.generateAllPlayerPositionMessages()
-	position_packets := position_messages.Encode(0)
+	position_packets := position_messages.Encode(client.getNumOfReceivedMessages())
+	client.increaseNumOfReceivedMessages()
 
 	server.SendPackets(remote_addr, position_packets)
 }
 
 func (server *Server) generateAllPlayerPositionMessages() messages.ManyPlayerPositionDto {
-	return messages.ManyPlayerPositionDto{}
+	players_pos_msg := messages.ManyPlayerPositionDto{}
+
+	list_pos := 0
+	for id, player_state := range server.state.players {
+		player_state.Mutex.Lock()
+		players_pos_msg.Positions[list_pos].PlayerID = id
+		players_pos_msg.Positions[list_pos].Pos.X = player_state.Pos.X
+		players_pos_msg.Positions[list_pos].Pos.Y = player_state.Pos.Y
+		player_state.Mutex.Unlock()
+	}
+
+	return players_pos_msg
 }
 
 func (server *Server) SendPackets(dest_addr *net.UDPAddr, packets [][]byte) {
@@ -146,3 +169,50 @@ func (server *Server) SendPackets(dest_addr *net.UDPAddr, packets [][]byte) {
 }
 
 func (server *Server) SendPacket(dest_addr *net.UDPAddr, packets []byte) {}
+
+// Increases the counter of messages received from this client by 1. If the client was not registered yet, it registers it.
+// WARNING: this function does not set the number of the last message received. (variable used to keep track of the correct order of the messages
+// received by a certain client)
+func (server *Server) AcountMessage(remote_addr *net.UDPAddr) {
+	client, exists := server.clients[remote_addr.String()]
+	if !exists {
+		server.RegisterNewClient(remote_addr)
+		return
+	}
+
+	client.mutex.Lock()
+	client.n_msg_recv++
+	client.mutex.Unlock()
+}
+
+func (server *Server) RegisterNewClient(remote_addr *net.UDPAddr) {
+	server.clients[remote_addr.String()] = &ClientInfo{
+		n_msg_sent:    0,
+		n_msg_recv:    1,
+		last_msg_recv: 0,
+	}
+}
+
+func (client *ClientInfo) setLastMessage(ordering uint64) {
+	client.mutex.Lock()
+	client.last_msg_recv = ordering
+	client.mutex.Unlock()
+}
+
+func (client *ClientInfo) getLastMessage() uint64 {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return client.last_msg_recv
+}
+
+func (client *ClientInfo) getNumOfReceivedMessages() uint64 {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return client.n_msg_recv
+}
+
+func (client *ClientInfo) increaseNumOfReceivedMessages() {
+	client.mutex.Lock()
+	client.n_msg_recv++
+	client.mutex.Unlock()
+}

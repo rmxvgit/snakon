@@ -18,10 +18,17 @@ const (
 )
 
 type Server struct {
-	addr        *net.UDPAddr
-	conn        *net.UDPConn
-	state_mutex sync.Mutex
-	state       *ServerState
+	addr    *net.UDPAddr
+	conn    *net.UDPConn
+	clients map[string]*ClientInfo
+	state   *ServerState
+}
+
+type ClientInfo struct {
+	mutex         sync.Mutex
+	n_msg_sent    uint64
+	n_msg_recv    uint64
+	last_msg_recv uint64
 }
 
 type ServerState struct {
