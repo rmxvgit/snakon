@@ -7,6 +7,7 @@ import (
 	gametypes "snakon/gameTypes"
 	"snakon/internet/messages"
 	"snakon/utils"
+	"strings"
 	"sync"
 )
 
@@ -22,7 +23,8 @@ func Run() {
 func NewServer(addr_str string) (serv *Server, err error) {
 	serv = &Server{}
 
-	serv.state = &ServerState{}
+	serv.state = EmptyServerState()
+	serv.clients = make(map[string]*ClientInfo)
 
 	serv.addr, err = net.ResolveUDPAddr("udp4", addr_str)
 	if err != nil {
@@ -47,11 +49,15 @@ func (server *Server) Listen() {
 			continue
 		}
 
+		fmt.Println(server.state.String())
+
 		go server.HandleMessage(remote_addr, buf)
 	}
 }
 
-func (server *Server) LogError(err error) {}
+func (server *Server) LogError(err error) {
+	println(err)
+}
 
 func (server *Server) HandleMessage(remote_addr *net.UDPAddr, data []byte) {
 	server.AcountMessage(remote_addr)
@@ -118,9 +124,8 @@ func (server *Server) HandleNewPlayerMessage(remote_addr *net.UDPAddr, data []by
 	}
 
 	server.state.players[msg_info.PlayerID] = &PlayerServerState{
-		LastMessage: 0,
-		Mutex:       sync.Mutex{},
-		Pos:         gametypes.Position{},
+		Mutex: sync.Mutex{},
+		Pos:   gametypes.Position{},
 	}
 
 	return nil, MsgOk
@@ -137,7 +142,9 @@ func (server *Server) SendResponse(remote_addr *net.UDPAddr, flag messages.Messa
 }
 
 func (server *Server) generateAllPlayerPositionMessages() messages.ManyPlayerPositionDto {
-	players_pos_msg := messages.ManyPlayerPositionDto{}
+	players_pos_msg := messages.ManyPlayerPositionDto{
+		Positions: make([]messages.PlayerPositionDto, len(server.state.players)),
+	}
 
 	list_pos := 0
 	for id, player_state := range server.state.players {
@@ -215,4 +222,21 @@ func (client *ClientInfo) increaseNumOfReceivedMessages() {
 	client.mutex.Lock()
 	client.n_msg_recv++
 	client.mutex.Unlock()
+}
+
+func (state *ServerState) String() string {
+	buff := strings.Builder{}
+	for key, value := range state.players {
+		value.Mutex.Lock()
+		value_representation := fmt.Sprintf("id:%d x:%d y:%d\n", key, value.Pos.X, value.Pos.Y)
+		buff.WriteString(value_representation)
+		value.Mutex.Unlock()
+	}
+	return buff.String()
+}
+
+func EmptyServerState() *ServerState {
+	return &ServerState{
+		players: make(map[int32]*PlayerServerState),
+	}
 }

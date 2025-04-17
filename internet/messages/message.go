@@ -4,6 +4,8 @@ import gametypes "snakon/gameTypes"
 
 type MessageFlag byte
 
+const PACKET_SIZE int = 1024
+
 const (
 	NEW_PLAYER_MESSAGE MessageFlag = iota
 	PLAYER_POS_MESSAGE

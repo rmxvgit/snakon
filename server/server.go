@@ -19,9 +19,9 @@ const (
 
 type Server struct {
 	addr    *net.UDPAddr
-	conn    *net.UDPConn
-	clients map[string]*ClientInfo
-	state   *ServerState
+	conn    *net.UDPConn           // the connection used for sending and receiving messages
+	clients map[string]*ClientInfo // a map containing client information
+	state   *ServerState           // the game state stored in the server
 }
 
 type ClientInfo struct {
@@ -36,7 +36,6 @@ type ServerState struct {
 }
 
 type PlayerServerState struct {
-	LastMessage uint64
-	Mutex       sync.Mutex
-	Pos         gametypes.Position
+	Mutex sync.Mutex
+	Pos   gametypes.Position
 }

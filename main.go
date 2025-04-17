@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"snakon/game"
+	"snakon/sender"
 	"snakon/server"
 )
 
@@ -16,6 +17,8 @@ func main() {
 		server.Run()
 	} else if run_mode == "cli" {
 		game.Run()
+	} else if run_mode == "send" {
+		sender.Run()
 	} else {
 		err := fmt.Errorf("invalid run mode: %s\n", run_mode)
 		panic(err)
