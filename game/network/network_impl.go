@@ -3,6 +3,7 @@ package network
 import (
 	"fmt"
 	"net"
+	gametypes "snakon/gameTypes"
 	"snakon/internet/messages"
 	"snakon/utils"
 )
@@ -87,4 +88,49 @@ func (network *GameNetwork) HandleManyPlayerPosMessage(remote_addr *net.UDPAddr,
 	network.state.Mutex.Unlock()
 
 	return nil
+}
+
+func (network *GameNetwork) SendNewPlayerNotification(player_id int32) error {
+	network.conn_mutex.Lock()
+	defer network.conn_mutex.Unlock()
+
+	msg := messages.NewPlayerDto{
+		PlayerID: player_id,
+	}
+
+	data := msg.Encode()
+	_, err := network.conn.WriteToUDP(data, network.server.addr)
+	utils.PanicOnError(err)
+
+	return nil
+}
+
+func (network *GameNetwork) SendPlayerPosition(player_id int32, pos gametypes.Position) error {
+	network.conn_mutex.Lock()
+	defer network.conn_mutex.Unlock()
+
+	msg := messages.PlayerPositionDto{
+		PlayerID: player_id,
+		Pos:      pos,
+	}
+
+	data := msg.Encode(network.server.n_msgs_received)
+	network.server.n_msgs_received++
+
+	_, err := network.conn.WriteToUDP(data, network.server.addr)
+	utils.PanicOnError(err)
+
+	return nil
+}
+
+func (network *GameNetwork) GetOtherPlayersPositions() map[int32]gametypes.Position {
+	positions := make(map[int32]gametypes.Position)
+
+	network.state.Mutex.Lock()
+	for id, player_state := range network.state.players {
+		positions[id] = player_state.Pos
+	}
+	network.state.Mutex.Unlock()
+
+	return positions
 }
