@@ -6,13 +6,18 @@ import (
 	gametypes "snakon/gameTypes"
 	"snakon/internet/messages"
 	"snakon/utils"
+	"sync"
 )
 
 func NewGameNetwork(my_addr, serv_addr string) (network *GameNetwork) {
 	network = &GameNetwork{}
 	var err error
 
-	//network.game_state = server.NewGameState()
+	network.state = NewGameState()
+	network.server = NewServerInfo()
+
+	network.server.n_msgs_received = 0
+	network.server.last_msg_ordering = 0
 
 	network.client_addr, err = net.ResolveUDPAddr("udp4", my_addr)
 	utils.PanicOnError(err)
@@ -20,8 +25,7 @@ func NewGameNetwork(my_addr, serv_addr string) (network *GameNetwork) {
 	network.server.addr, err = net.ResolveUDPAddr("udp4", serv_addr)
 	utils.PanicOnError(err)
 
-	network.server.n_msgs_received = 0
-	network.server.last_msg_ordering = 0
+	println(my_addr)
 
 	network.conn, err = net.ListenUDP("udp4", network.client_addr)
 	utils.PanicOnError(err)
@@ -133,4 +137,20 @@ func (network *GameNetwork) GetOtherPlayersPositions() map[int32]gametypes.Posit
 	network.state.Mutex.Unlock()
 
 	return positions
+}
+
+func NewGameState() *NetworkGameState {
+	return &NetworkGameState{
+		Mutex:   sync.Mutex{},
+		players: make(map[int32]*PlayerClientState),
+	}
+}
+
+func NewServerInfo() *ServerInfo {
+	return &ServerInfo{
+		Mutex:             sync.Mutex{},
+		addr:              nil,
+		last_msg_ordering: 0,
+		n_msgs_received:   0,
+	}
 }

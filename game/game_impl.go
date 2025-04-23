@@ -44,12 +44,13 @@ func (game *Game) start() {
 	for {
 		game.gather_input()
 		game.process()
+		game.render()
 		time.Sleep(10000000)
 	}
 }
 
 func (game *Game) process() {
-
+	game.movePlayer()
 	err := game.internet.SendPlayerPosition(game.player_id, game.player_pos)
 	utils.PanicOnError(err)
 }
@@ -71,4 +72,31 @@ func (game *Game) gather_input() {
 	}
 
 	game.other_players_pos = game.internet.GetOtherPlayersPositions()
+}
+
+func (game *Game) movePlayer() {
+	switch game.player_move_dir {
+	case gametypes.DirectionUp:
+		game.player_pos.Y--
+	case gametypes.DirectionDown:
+		game.player_pos.Y++
+	case gametypes.DirectionLeft:
+		game.player_pos.X--
+	case gametypes.DirectionRight:
+		game.player_pos.X++
+	}
+}
+
+func (game *Game) render() {
+	game.renderer.CleanBuffer()
+
+	// Render player
+	game.renderer.WriteChar(int(game.player_pos.X), int(game.player_pos.Y), 'P')
+
+	// Render other players
+	for _, pos := range game.other_players_pos {
+		game.renderer.WriteChar(int(pos.X), int(pos.Y), 'O')
+	}
+
+	game.renderer.Flush()
 }
